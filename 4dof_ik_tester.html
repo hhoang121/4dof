@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>4-DOF arm — inverse kinematics tester</title>
+<style>
+:root{--bg:#fafaf7;--fg:#1d1d1b;--mut:#6b6b66;--card:#fff;--bd:#dcdcd4;--ac:#2563eb;--c1:#d9480f;--c2:#2563eb;--c3:#0f9d6b;--c4:#9333ea;--grid:#d9d9d0;
+color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#161615;--fg:#ececE6;--mut:#a0a09a;--card:#1f1f1d;--bd:#3a3a36;--ac:#6ea0ff;--grid:#33332f;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#161615;--fg:#ececE6;--mut:#a0a09a;--card:#1f1f1d;--bd:#3a3a36;--ac:#6ea0ff;--grid:#33332f;color-scheme:dark}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+main{max-width:1100px;margin:0 auto;padding:16px;display:grid;gap:16px;grid-template-columns:minmax(0,340px) minmax(0,1fr)}
+@media(max-width:800px){main{grid-template-columns:minmax(0,1fr)}}
+h1{font-size:20px;margin:0 0 4px}h2{font-size:14px;margin:0 0 8px;text-transform:uppercase;letter-spacing:.04em;color:var(--mut)}
+p.s{margin:0 0 12px;color:var(--mut);font-size:13px}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:14px;margin-bottom:12px}
+.row{display:grid;grid-template-columns:90px 1fr 54px;gap:8px;align-items:center;margin:6px 0}
+.g3{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+label{font-size:13px;color:var(--mut)}
+input[type=number],select{width:100%;box-sizing:border-box;padding:6px 8px;border:1px solid var(--bd);border-radius:8px;background:var(--bg);color:var(--fg);font:inherit}
+input[type=range]{width:100%}
+button{padding:9px 14px;border-radius:8px;border:1px solid var(--ac);background:var(--ac);color:#fff;font:inherit;cursor:pointer;width:100%}
+button.b2{background:transparent;color:var(--ac);margin-top:8px}
+.chk{display:flex;gap:8px;align-items:center;margin:8px 0;font-size:14px;color:var(--fg)}
+#res{font-size:13px;white-space:pre-line}
+.ok{color:var(--c3)}.bad{color:var(--c1)}
+canvas{width:100%;height:520px;display:block;border:1px solid var(--bd);border-radius:12px;background:var(--card);touch-action:none;cursor:grab}
+@media(max-width:800px){canvas{height:380px}}
+.hint{font-size:12px;color:var(--mut);margin-top:6px}
+</style>
+</head>
+<body>
+<main>
+<div>
+ <h1>4-DOF arm · inverse-kinematics tester</h1>
+ <p class="s">Nhập tọa độ, bấm nút và xem cánh tay di chuyển tới đó. Độ dài tính bằng cm, góc tính bằng độ.</p>
+ <div class="card">
+  <h2>Target</h2>
+  <div class="g3">
+   <div><label>x</label><input id="x" type="number" value="20" step="1"></div>
+   <div><label>y</label><input id="y" type="number" value="10" step="1"></div>
+   <div><label>z</label><input id="z" type="number" value="12" step="1"></div>
+  </div>
+  <div style="margin-top:8px"><label>Tool pitch φ (0 = ngang, 90 = lên, −90 = xuống)</label><input id="phi" type="number" value="-45" step="5"></div>
+  <label class="chk"><input id="free" type="checkbox"> Chỉ vị trí (bộ giải tự chọn φ gần nhất)</label>
+  <div><label>Khuỷu</label><select id="elb"><option value="1">Khuỷu lên</option><option value="-1">Khuỷu xuống</option></select></div>
+  <div style="margin-top:12px"><button id="go">Move arm to target</button></div>
+  <button class="b2" id="home">Home pose (all 0)</button>
+ </div>
+ <div class="card"><h2>Result</h2><div id="res">Bấm “Move arm to target”.</div></div>
+ <div class="card">
+  <h2>Joint angles (kéo để thử FK)</h2>
+  <div class="row"><label>J1 yaw</label><input id="s1" type="range" min="-180" max="180" step="1" value="0"><span id="v1"></span></div>
+  <div class="row"><label>J2 shoulder</label><input id="s2" type="range" min="-90" max="180" step="1" value="90"><span id="v2"></span></div>
+  <div class="row"><label>J3 elbow</label><input id="s3" type="range" min="-170" max="170" step="1" value="0"><span id="v3"></span></div>
+  <div class="row"><label>J4 wrist</label><input id="s4" type="range" min="-170" max="170" step="1" value="0"><span id="v4"></span></div>
+  <div class="hint">Model: H = 10.5, L₂ = 10, L₃ = 9.5, L_t = 13 cm (L₄ + tool). Tầm với ≈ 32.5 cm tính từ J2.</div>
+ </div>
+</div>
+<div>
+ <canvas id="cv"></canvas>
+ <div class="hint">kéo để xoay · cuộn chuột để zoom · hình vuông đỏ = mục tiêu</div>
+</div>
+</main>
+<script>
+(function(){
+var H=10.5,L2=10,L3=9.5,LT=13,D=Math.PI/180;
+var cur={t1:0,t2:90*D,q3:0,t4:0},tgt=null,goal=null,trail=[];
+var cam={az:-0.8,el:0.45,sc:7.5};
+var $=function(i){return document.getElementById(i)};
+var cv=$('cv'),cx=cv.getContext('2d');
+function css(n){return getComputedStyle(document.documentElement).getPropertyValue(n).trim()}
+function fk(a){
+ var a2=a.t2,a3=a2+a.q3,a4=a3+a.t4,c=Math.cos(a.t1),s=Math.sin(a.t1);
+ function P(r,z){return [r*c,r*s,z]}
+ var r1=0,z1=H,r2=L2*Math.cos(a2),z2=H+L2*Math.sin(a2),r3=r2+L3*Math.cos(a3),z3=z2+L3*Math.sin(a3),r4=r3+LT*Math.cos(a4),z4=z3+LT*Math.sin(a4);
+ return {pts:[[0,0,0],[0,0,H],P(r2,z2),P(r3,z3),P(r4,z4)],phi:a4};
+}
+function solve(x,y,z,phi,elb){
+ var t1=Math.atan2(y,x),r=Math.hypot(x,y),wx=r-LT*Math.cos(phi),wz=z-H-LT*Math.sin(phi);
+ var d2=wx*wx+wz*wz,c3=(d2-L2*L2-L3*L3)/(2*L2*L3);
+ if(c3>1+1e-9||c3<-1-1e-9)return null;
+ c3=Math.max(-1,Math.min(1,c3));
+ var q3=-elb*Math.acos(c3);
+ var t2=Math.atan2(wz,wx)-Math.atan2(L3*Math.sin(q3),L2+L3*Math.cos(q3));
+ return {t1:t1,t2:t2,q3:q3,t4:phi-t2-q3};
+}
+function wrap(a){while(a>Math.PI)a-=2*Math.PI;while(a<-Math.PI)a+=2*Math.PI;return a}
+function go(){
+ var x=+$('x').value,y=+$('y').value,z=+$('z').value,elb=+$('elb').value,res=$('res'),sol=null,phi;
+ if($('free').checked){
+  var cp=fk(cur).phi,best=1e9;
+  for(var d=-180;d<=180;d++){var p=d*D,s=solve(x,y,z,p,elb);if(s){var e=Math.abs(wrap(p-cp));if(e<best){best=e;sol=s;phi=p}}}
+ }else{phi=+$('phi').value*D;sol=solve(x,y,z,phi,elb)}
+ goal=[x,y,z];
+ if(!sol){res.innerHTML='<span class="bad">Không với tới được: mục tiêu nằm ngoài tầm với (hoặc φ không khả thi).</span>';tgt=null;return}
+ sol.t1=wrap(sol.t1);sol.t2=wrap(sol.t2);sol.q3=wrap(sol.q3);sol.t4=wrap(sol.t4);
+ tgt=sol;trail=[];
+ var f=fk(sol).pts[4],err=Math.hypot(f[0]-x,f[1]-y,f[2]-z);
+ res.innerHTML='<span class="ok">Đã tìm được nghiệm.</span>\nJ1 = '+(sol.t1/D).toFixed(1)+'°\nJ2 = '+(sol.t2/D).toFixed(1)+'°\nJ3 = '+(sol.q3/D).toFixed(1)+'°\nJ4 = '+(sol.t4/D).toFixed(1)+'°\nTool pitch φ = '+(phi/D).toFixed(1)+'°\nSai số vị trí = '+err.toExponential(1)+' cm';
+}
+function sync(){
+ var v=[cur.t1,cur.t2,cur.q3,cur.t4];
+ for(var i=0;i<4;i++){$('s'+(i+1)).value=Math.round(v[i]/D);$('v'+(i+1)).textContent=Math.round(v[i]/D)+'°'}
+}
+['1','2','3','4'].forEach(function(n,i){
+ $('s'+n).addEventListener('input',function(){
+  var k=['t1','t2','q3','t4'][i];cur[k]=+this.value*D;tgt=null;trail=[];sync();
+  var f=fk(cur);$('res').textContent='FK → tip: x='+f.pts[4][0].toFixed(1)+', y='+f.pts[4][1].toFixed(1)+', z='+f.pts[4][2].toFixed(1)+', φ='+(f.phi/D).toFixed(0)+'°';
+ });
+});
+$('go').onclick=go;
+$('home').onclick=function(){tgt={t1:0,t2:0,q3:0,t4:0};goal=null;trail=[];$('res').textContent='Về home pose.'};
+function proj(p,w,h){
+ var c=Math.cos(cam.az),s=Math.sin(cam.az),x1=p[0]*c-p[1]*s,y1=p[0]*s+p[1]*c;
+ return [w/2+x1*cam.sc,h*0.72-(p[2]*Math.cos(cam.el)-y1*Math.sin(cam.el))*cam.sc,y1*Math.cos(cam.el)+p[2]*Math.sin(cam.el)];
+}
+function line(a,b,w,col,W,Hh){var A=proj(a,W,Hh),B=proj(b,W,Hh);cx.strokeStyle=col;cx.lineWidth=w;cx.lineCap='round';cx.beginPath();cx.moveTo(A[0],A[1]);cx.lineTo(B[0],B[1]);cx.stroke()}
+function draw(){
+ var dpr=window.devicePixelRatio||1,W=cv.clientWidth,Hh=cv.clientHeight;
+ if(cv.width!==Math.round(W*dpr)){cv.width=Math.round(W*dpr);cv.height=Math.round(Hh*dpr)}
+ cx.setTransform(dpr,0,0,dpr,0,0);cx.clearRect(0,0,W,Hh);
+ for(var i=-40;i<=40;i+=10){line([i,-40,0],[i,40,0],1,css('--grid'),W,Hh);line([-40,i,0],[40,i,0],1,css('--grid'),W,Hh)}
+ line([0,0,0],[8,0,0],2,'#d9480f',W,Hh);line([0,0,0],[0,8,0],2,'#0f9d6b',W,Hh);line([0,0,0],[0,0,8],2,'#2563eb',W,Hh);
+ var f=fk(cur).pts;
+ var cols=[css('--c1'),css('--c2'),css('--c3'),css('--c4')];
+ line(f[0],f[1],12,css('--mut'),W,Hh);
+ for(var k=1;k<4;k++)line(f[k],f[k+1],k==3?6:9,cols[k],W,Hh);
+ f.forEach(function(p,k){var q=proj(p,W,Hh);cx.fillStyle=css('--fg');cx.beginPath();cx.arc(q[0],q[1],k==4?4:6,0,7);cx.fill();cx.fillStyle=css('--bg');cx.beginPath();cx.arc(q[0],q[1],k==4?2:3,0,7);cx.fill()});
+ if(goal){var g=proj(goal,W,Hh);cx.strokeStyle='#d9480f';cx.lineWidth=2;cx.strokeRect(g[0]-6,g[1]-6,12,12)}
+ cx.strokeStyle=css('--ac');cx.lineWidth=1.5;cx.beginPath();trail.forEach(function(p,i){var q=proj(p,W,Hh);i?cx.lineTo(q[0],q[1]):cx.moveTo(q[0],q[1])});cx.stroke();
+}
+function tick(){
+ if(tgt){
+  var done=true,ks=['t1','t2','q3','t4'];
+  ks.forEach(function(k){var d=wrap(tgt[k]-cur[k]),st=2.2*D;if(Math.abs(d)>st){cur[k]+=Math.sign(d)*st;done=false}else cur[k]=tgt[k]});
+  trail.push(fk(cur).pts[4]);sync();if(done)tgt=null;
+ }
+ draw();requestAnimationFrame(tick);
+}
+var drag=null;
+cv.addEventListener('pointerdown',function(e){drag=[e.clientX,e.clientY];cv.setPointerCapture(e.pointerId)});
+cv.addEventListener('pointermove',function(e){if(!drag)return;cam.az+=(e.clientX-drag[0])*0.008;cam.el=Math.max(-0.2,Math.min(1.5,cam.el+(e.clientY-drag[1])*0.008));drag=[e.clientX,e.clientY]});
+cv.addEventListener('pointerup',function(){drag=null});
+cv.addEventListener('wheel',function(e){e.preventDefault();cam.sc=Math.max(3,Math.min(20,cam.sc*(e.deltaY<0?1.08:0.92)))},{passive:false});
+sync();tick();
+})();
+</script>
+</body>
+</html>
